@@ -24,8 +24,23 @@ function getSupabaseConfig(): SupabaseConfig {
     throw new ApiError(500, "INTERNAL", "Supabase server environment is not configured.");
   }
 
+  if (serviceRoleKey.startsWith("sb_publishable_") || serviceRoleKey.startsWith("eyJ")) {
+    throw new ApiError(
+      500,
+      "INTERNAL",
+      "SUPABASE_SERVICE_ROLE_KEY must be the server-only service_role secret, not the publishable/anon key.",
+    );
+  }
+
+  let normalizedUrl: string;
+  try {
+    normalizedUrl = new URL(url).toString().replace(/\/$/, "");
+  } catch {
+    throw new ApiError(500, "INTERNAL", "SUPABASE_URL is not a valid URL.");
+  }
+
   cachedConfig = {
-    url: url.replace(/\/$/, ""),
+    url: normalizedUrl,
     serviceRoleKey,
   };
   return cachedConfig;
