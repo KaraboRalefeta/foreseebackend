@@ -1,8 +1,17 @@
 import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 
-import { CHAT_SYSTEM_PROMPT, PARSE_SYSTEM_PROMPT } from "@/lib/ai/prompts";
-import { chatModelOutputSchema, parseModelOutputSchema } from "@/lib/ai/schemas";
+import {
+  CHAT_SYSTEM_PROMPT,
+  CONTEXT_RESOLVER_SYSTEM_PROMPT,
+  FINANCE_ADVISOR_SYSTEM_PROMPT,
+  PARSE_SYSTEM_PROMPT,
+} from "@/lib/ai/prompts";
+import {
+  chatModelOutputSchema,
+  contextResolverOutputSchema,
+  parseModelOutputSchema,
+} from "@/lib/ai/schemas";
 import { ApiError } from "@/lib/http/errors";
 
 const DEFAULT_CHAT_MODEL = "gpt-5.4-mini";
@@ -41,6 +50,7 @@ function safeZodTextFormat(params: {
   description: string;
 }):
   | ReturnType<typeof zodTextFormat<typeof chatModelOutputSchema>>
+  | ReturnType<typeof zodTextFormat<typeof contextResolverOutputSchema>>
   | ReturnType<typeof zodTextFormat<typeof parseModelOutputSchema>>
   | undefined {
   try {
@@ -192,6 +202,7 @@ async function callModel(params: {
   maxOutputTokens: number;
   textFormat?:
     | ReturnType<typeof zodTextFormat<typeof chatModelOutputSchema>>
+    | ReturnType<typeof zodTextFormat<typeof contextResolverOutputSchema>>
     | ReturnType<typeof zodTextFormat<typeof parseModelOutputSchema>>;
 }): Promise<ModelCallResult> {
   const client = getClient();
@@ -297,6 +308,62 @@ export async function callChatModel(args: {
     model,
     userInput: args.promptInput,
     systemPrompt: CHAT_SYSTEM_PROMPT,
+    maxOutputTokens: args.maxOutputTokens,
+    textFormat,
+  });
+
+  return {
+    result:
+      call.parsedOutput ??
+      chatModelOutputSchema.parse(parseJsonText(call.outputText)),
+    model: call.model,
+    usage: call.usage,
+  };
+}
+
+export async function callContextResolverModel(args: {
+  promptInput: string;
+  model?: string;
+  maxOutputTokens: number;
+}): Promise<{ result: unknown; model: string; usage: Usage }> {
+  const model = args.model ?? getAiConfig().chatModel;
+  const textFormat = safeZodTextFormat({
+    schema: contextResolverOutputSchema,
+    name: "foresee_context_resolver_response",
+    description: "Structured finance context resolver classification.",
+  });
+  const call = await callModel({
+    model,
+    userInput: args.promptInput,
+    systemPrompt: CONTEXT_RESOLVER_SYSTEM_PROMPT,
+    maxOutputTokens: args.maxOutputTokens,
+    textFormat,
+  });
+
+  return {
+    result:
+      call.parsedOutput ??
+      contextResolverOutputSchema.parse(parseJsonText(call.outputText)),
+    model: call.model,
+    usage: call.usage,
+  };
+}
+
+export async function callFinanceAdvisorModel(args: {
+  promptInput: string;
+  model?: string;
+  maxOutputTokens: number;
+}): Promise<{ result: unknown; model: string; usage: Usage }> {
+  const model = args.model ?? getAiConfig().chatModel;
+  const textFormat = safeZodTextFormat({
+    schema: chatModelOutputSchema,
+    name: "foresee_finance_advisor_response",
+    description: "Structured Sovereign Concierge finance advisor response.",
+  });
+  const call = await callModel({
+    model,
+    userInput: args.promptInput,
+    systemPrompt: FINANCE_ADVISOR_SYSTEM_PROMPT,
     maxOutputTokens: args.maxOutputTokens,
     textFormat,
   });

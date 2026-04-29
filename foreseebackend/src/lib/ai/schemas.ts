@@ -29,6 +29,23 @@ const CHAT_RESPONSE_MODE_VALUES = [
   "error",
 ] as const;
 const METRIC_TONE_VALUES = ["positive", "neutral", "warning"] as const;
+export const RESOLVER_CLASSIFICATION_VALUES = [
+  "AskQuestion",
+  "AffordabilityCheck",
+  "CreateExpense",
+  "CreateIncome",
+  "CreatePlannedSpend",
+  "CreateUpcomingBill",
+  "CreateSplitExpense",
+  "CreateDebtRepayment",
+  "ConfirmPendingAction",
+  "RejectPendingAction",
+  "ModifyPendingAction",
+  "HesitateOnPendingAction",
+  "MissingDetailAnswer",
+  "GeneralFinanceAdvice",
+  "Unknown",
+] as const;
 
 export const financeEventTypeSchema = z.enum([
   "Spent",
@@ -114,7 +131,7 @@ const conversationTurnSchema = z
   })
   .strict();
 
-const pendingIntentSchema = z
+export const pendingIntentSchema = z
   .object({
     intent: z.enum(INTENT_VALUES),
     missingFields: z.array(z.string().min(1).max(80)).max(20),
@@ -160,10 +177,23 @@ const requestMetaSchema = z
   })
   .passthrough();
 
+const completedActionSchema = z
+  .object({
+    type: z.enum(INTENT_VALUES).exclude(["Unknown"]).optional(),
+    amountCents: amountCentsSchema.optional(),
+    description: z.string().min(1).max(200).optional(),
+    category: z.string().min(1).max(80).optional(),
+    label: z.string().min(1).max(120).optional(),
+  })
+  .passthrough();
+
 export const chatRequestSchema = z
   .object({
     message: z.string().min(1),
     requestType: z.literal("chat").optional().default("chat"),
+    sessionId: z.string().min(1).max(120).optional(),
+    deviceId: z.string().min(1).max(120).optional(),
+    monthKey: monthKeySchema.optional(),
     context: chatContextSchema.optional(),
     session: z
       .object({
@@ -177,6 +207,8 @@ export const chatRequestSchema = z
     pendingIntent: pendingIntentSchema.nullable().optional(),
     uiState: uiStateSchema.optional(),
     requestMeta: requestMetaSchema.optional(),
+    appConfirmedAction: z.boolean().optional(),
+    completedAction: completedActionSchema.optional(),
   })
   .strict();
 
@@ -596,6 +628,23 @@ export const chatModelOutputSchema = z
   })
   .strict();
 
+export const contextResolverOutputSchema = z
+  .object({
+    classification: z.enum(RESOLVER_CLASSIFICATION_VALUES),
+    refersToPendingIntent: z.boolean().optional(),
+    resolvedIntent: z.enum(INTENT_VALUES).nullable().optional(),
+    shouldCreateDraft: z.boolean().optional(),
+    shouldAskForDetail: z.boolean().optional(),
+    shouldAnswerQuestion: z.boolean().optional(),
+    shouldRunAffordabilityCheck: z.boolean().optional(),
+    missingFields: z.array(z.string().min(1).max(80)).max(12).optional(),
+    fieldUpdates: z.record(z.string(), z.unknown()).optional(),
+    resolvedDraftCandidate: z.record(z.string(), z.unknown()).nullable().optional(),
+    requestedAmountCents: amountCentsSchema.nullable().optional(),
+    confidence: z.number().min(0).max(1).optional(),
+  })
+  .strict();
+
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 export type ParseRequest = z.infer<typeof parseRequestSchema>;
 export type DraftAction = z.infer<typeof draftActionSchema>;
@@ -603,4 +652,5 @@ export type ParseData = z.infer<typeof parseDataSchema>;
 export type ChatData = z.infer<typeof chatDataSchema>;
 export type ParseModelOutput = z.infer<typeof parseModelOutputSchema>;
 export type ChatModelOutput = z.infer<typeof chatModelOutputSchema>;
+export type ContextResolverOutput = z.infer<typeof contextResolverOutputSchema>;
 export type Intent = (typeof INTENT_VALUES)[number];

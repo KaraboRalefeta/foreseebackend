@@ -30,34 +30,55 @@ describe("computeAffordability", () => {
     expect(result.affordabilityCheck?.remainingAfterCents).toBe(155000);
   });
 
-  it("returns affordable when enough projected balance remains", () => {
+  it("uses projected balance but marks risk unknown when safe-to-spend is missing", () => {
     const result = computeAffordability({
       message: "Trip is R2000",
       context: { projectedEndCents: 324000 },
     });
 
-    expect(result.affordabilityCheck?.status).toBe("affordable");
+    expect(result.affordabilityCheck?.status).toBe("unknown");
     expect(result.affordabilityCheck?.remainingAfterCents).toBe(124000);
     expect(result.missingFields).toHaveLength(0);
+  });
+
+  it("returns low risk when requested amount is under 40% of safe-to-spend", () => {
+    const result = computeAffordability({
+      message: "Transport is R700",
+      context: { projectedEndCents: 586000, safeToSpendCents: 280000 },
+    });
+
+    expect(result.affordabilityCheck?.status).toBe("low");
+    expect(result.affordabilityCheck?.safeToSpendAfterCents).toBe(210000);
+    expect(result.affordabilityCheck?.projectedEndAfterCents).toBe(516000);
+    expect(result.affordabilityCheck?.isAffordable).toBe(true);
+  });
+
+  it("returns moderate risk when requested amount is under 75% of safe-to-spend", () => {
+    const result = computeAffordability({
+      message: "Trip is R1500",
+      context: { projectedEndCents: 400000, safeToSpendCents: 250000 },
+    });
+
+    expect(result.affordabilityCheck?.status).toBe("moderate");
   });
 
   it("returns tight when remaining is positive but low", () => {
     const result = computeAffordability({
       message: "Trip is R2000",
-      context: { projectedEndCents: 205000 },
+      context: { projectedEndCents: 205000, safeToSpendCents: 205000 },
     });
 
     expect(result.affordabilityCheck?.status).toBe("tight");
     expect(result.affordabilityCheck?.remainingAfterCents).toBe(5000);
   });
 
-  it("returns not_affordable when remaining is negative", () => {
+  it("returns risky when remaining is negative", () => {
     const result = computeAffordability({
       message: "Trip is R2000",
-      context: { projectedEndCents: 150000 },
+      context: { projectedEndCents: 150000, safeToSpendCents: 150000 },
     });
 
-    expect(result.affordabilityCheck?.status).toBe("not_affordable");
+    expect(result.affordabilityCheck?.status).toBe("risky");
     expect(result.affordabilityCheck?.remainingAfterCents).toBe(-50000);
   });
 

@@ -233,7 +233,10 @@ function classifyAssistantMode(
     return "action_confirmation";
   }
 
-  if (affordability.affordabilityCheck?.status === "tight" || affordability.affordabilityCheck?.status === "not_affordable") {
+  if (
+    affordability.affordabilityCheck?.status === "tight" ||
+    affordability.affordabilityCheck?.status === "risky"
+  ) {
     return "warning";
   }
 
