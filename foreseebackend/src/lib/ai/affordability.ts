@@ -1,12 +1,18 @@
 import type { ChatRequest } from "@/lib/ai/schemas";
 
-export type AffordabilityStatus = "affordable" | "tight" | "not_affordable";
+export type AffordabilityStatus = "low" | "moderate" | "tight" | "risky" | "unknown";
 
 export type AffordabilityCheck = {
   status: AffordabilityStatus;
+  riskLevel: AffordabilityStatus;
   requestedAmountCents: number;
   projectedEndCents: number | null;
   safeToSpendCents: number | null;
+  safeToSpendBeforeCents: number | null;
+  safeToSpendAfterCents: number | null;
+  projectedEndBeforeCents: number | null;
+  projectedEndAfterCents: number | null;
+  isAffordable: boolean | null;
   remainingAfterCents: number;
   evaluatedAgainst: "safe_to_spend" | "projected_end";
   basis: string;
@@ -64,8 +70,12 @@ export function extractRequestedAmountCents(message: string): number | null {
 export function computeAffordability(input: {
   message: string;
   context?: ChatRequest["context"];
+  requestedAmountCents?: number | null;
 }): AffordabilityResult {
-  const requestedAmountCents = extractRequestedAmountCents(input.message);
+  const requestedAmountCents =
+    typeof input.requestedAmountCents === "number"
+      ? input.requestedAmountCents
+      : extractRequestedAmountCents(input.message);
   const projectedEndCents = input.context?.projectedEndCents;
   const safeToSpendCents = input.context?.safeToSpendCents ?? input.context?.budgetSafeRoomCents;
 
@@ -105,20 +115,32 @@ export function computeAffordability(input: {
   const tightThreshold = Math.max(50000, Math.round(requestedAmountCents * 0.1));
 
   let status: AffordabilityStatus;
-  if (remainingAfterCents < 0) {
-    status = "not_affordable";
-  } else if (remainingAfterCents <= tightThreshold) {
-    status = "tight";
+  if (typeof safeToSpendCents !== "number") {
+    status = "unknown";
+  } else if (requestedAmountCents > safeToSpendCents) {
+    status = "risky";
+  } else if (requestedAmountCents <= safeToSpendCents * 0.4) {
+    status = "low";
+  } else if (requestedAmountCents <= safeToSpendCents * 0.75) {
+    status = "moderate";
   } else {
-    status = "affordable";
+    status = remainingAfterCents <= tightThreshold ? "tight" : "tight";
   }
 
   return {
     affordabilityCheck: {
       status,
+      riskLevel: status,
       requestedAmountCents,
       projectedEndCents: typeof projectedEndCents === "number" ? projectedEndCents : null,
       safeToSpendCents: typeof safeToSpendCents === "number" ? safeToSpendCents : null,
+      safeToSpendBeforeCents: typeof safeToSpendCents === "number" ? safeToSpendCents : null,
+      safeToSpendAfterCents:
+        typeof safeToSpendCents === "number" ? safeToSpendCents - requestedAmountCents : null,
+      projectedEndBeforeCents: typeof projectedEndCents === "number" ? projectedEndCents : null,
+      projectedEndAfterCents:
+        typeof projectedEndCents === "number" ? projectedEndCents - requestedAmountCents : null,
+      isAffordable: remainingAfterCents >= 0,
       remainingAfterCents,
       evaluatedAgainst:
         typeof safeToSpendCents === "number" ? "safe_to_spend" : "projected_end",

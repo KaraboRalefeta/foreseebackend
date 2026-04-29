@@ -1461,7 +1461,7 @@ export function normalizeChatOutput(
   const likelyConfirmation = request ? looksLikeConfirmation(request.message) : false;
   const warningSignal =
     affordabilityStatus === "tight" ||
-    affordabilityStatus === "not_affordable" ||
+    affordabilityStatus === "risky" ||
     (typeof safeToSpendCents === "number" && safeToSpendCents < 0) ||
     (typeof projectedSurplusCents === "number" && projectedSurplusCents < 0) ||
     warnings.some((warning) => /\btight|risk|caution|over|insufficient|short\b/i.test(warning));

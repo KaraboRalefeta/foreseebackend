@@ -1,10 +1,34 @@
 import { NextRequest } from "next/server";
 
-import { callChatModel, getAiConfig } from "@/lib/ai/openai";
-import { buildChatPromptInput } from "@/lib/ai/chat-prompt";
+import { computeAffordability } from "@/lib/ai/affordability";
+import {
+  buildResolverPromptInput,
+  deterministicResolve,
+  reconcileResolverOutput,
+} from "@/lib/ai/context-resolver";
+import {
+  buildCompletedResponse,
+  enforceDraftSafety,
+  mergePendingIntent,
+  type PendingIntent,
+} from "@/lib/ai/draft-safety";
+import { loadMonthlyFinanceContext } from "@/lib/ai/finance-context";
+import {
+  callContextResolverModel,
+  callFinanceAdvisorModel,
+  getAiConfig,
+} from "@/lib/ai/openai";
+import { buildChatPromptPayload } from "@/lib/ai/chat-prompt";
 import { addAiLog } from "@/lib/ai/logs";
 import { normalizeChatOutput } from "@/lib/ai/normalize";
-import { chatModelOutputSchema, chatRequestSchema } from "@/lib/ai/schemas";
+import { chatModelOutputSchema, chatRequestSchema, type ChatRequest } from "@/lib/ai/schemas";
+import {
+  clearPendingIntent,
+  getPendingIntent,
+  getRecentConversation,
+  persistConversationTurn,
+  savePendingIntent,
+} from "@/lib/ai/chat-state";
 import { ApiError, fromUnknownError } from "@/lib/http/errors";
 import {
   createRequestId,
@@ -12,15 +36,94 @@ import {
   optionsResponse,
   successResponse,
 } from "@/lib/http/response";
+import { bearerTokenFromAuthorization, getSupabaseUser } from "@/lib/supabase/client";
 
 export const runtime = "nodejs";
 
 type ChatRouteData = ReturnType<typeof normalizeChatOutput>;
 
-function looksLikeConfirmation(message: string): boolean {
-  return /^(yes|yep|yeah|ok|okay|sure|confirm|please do|do it|go ahead|sounds good|let's do that|lets do that)\b/i.test(
-    message.trim(),
+type Usage = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+};
+
+function zeroUsage(): Usage {
+  return { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+}
+
+function addUsage(left: Usage, right: Usage): Usage {
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
+  };
+}
+
+function readRequiredSessionId(parsed: ChatRequest): string {
+  const sessionId = parsed.session?.sessionId ?? parsed.sessionId;
+  if (!sessionId) {
+    throw new ApiError(400, "BAD_REQUEST", "sessionId is required.");
+  }
+  return sessionId;
+}
+
+function readRequiredMonthKey(parsed: ChatRequest): string {
+  const monthKey = parsed.context?.monthKey ?? parsed.monthKey;
+  if (!monthKey) {
+    throw new ApiError(400, "BAD_REQUEST", "monthKey is required.");
+  }
+  return monthKey;
+}
+
+function toPendingIntent(value: ChatRequest["pendingIntent"]): PendingIntent | null {
+  return value && value.intent !== "Unknown" ? value : null;
+}
+
+function buildAdvisorPromptInput(params: {
+  request: ChatRequest;
+  resolver: unknown;
+  affordabilityCheck: unknown;
+}): string {
+  const payload = buildChatPromptPayload(params.request) as Record<string, unknown>;
+  const derivedContext =
+    payload.derivedContext && typeof payload.derivedContext === "object"
+      ? (payload.derivedContext as Record<string, unknown>)
+      : {};
+
+  return JSON.stringify(
+    {
+      ...payload,
+      task: "Compose a Sovereign Concierge finance response.",
+      resolvedContext: params.resolver,
+      derivedContext: {
+        ...derivedContext,
+        affordabilityCheck: params.affordabilityCheck,
+      },
+    },
+    null,
+    2,
   );
+}
+
+async function persistTurnPair(params: {
+  user: Awaited<ReturnType<typeof getSupabaseUser>>;
+  sessionId: string;
+  userMessage: string;
+  assistantReply: string;
+}): Promise<void> {
+  await persistConversationTurn({
+    user: params.user,
+    sessionId: params.sessionId,
+    role: "user",
+    content: params.userMessage,
+  });
+  await persistConversationTurn({
+    user: params.user,
+    sessionId: params.sessionId,
+    role: "assistant",
+    content: params.assistantReply,
+  });
 }
 
 export async function OPTIONS(req: NextRequest) {
@@ -32,19 +135,11 @@ export async function POST(req: NextRequest) {
   const startedAt = Date.now();
   const config = getAiConfig();
   let requestPreview = "unavailable";
-  let requestDebug:
-    | {
-        topLevelKeys?: string[];
-        hasContext?: boolean;
-        hasConversation?: boolean;
-        conversationLength?: number;
-        hasPendingIntent?: boolean;
-        hasUiState?: boolean;
-      }
-    | undefined;
   let inputPreview = "chat request failed before a valid model response was returned";
 
   try {
+    const token = bearerTokenFromAuthorization(req.headers.get("authorization"));
+    const user = await getSupabaseUser(token);
     const rawBody = await req.text().catch(() => {
       throw new ApiError(400, "BAD_REQUEST", "Invalid request body.");
     });
@@ -57,24 +152,9 @@ export async function POST(req: NextRequest) {
         throw new ApiError(400, "BAD_REQUEST", "Invalid JSON request body.");
       }
     })();
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      throw new ApiError(400, "BAD_REQUEST", "JSON body must be an object.");
-    }
-
-    const untypedBody = body as Record<string, unknown>;
-    requestDebug = {
-      topLevelKeys: Object.keys(untypedBody).slice(0, 20),
-      hasContext: typeof untypedBody.context === "object" && untypedBody.context !== null,
-      hasConversation: Array.isArray(untypedBody.conversation),
-      conversationLength: Array.isArray(untypedBody.conversation)
-        ? untypedBody.conversation.length
-        : undefined,
-      hasPendingIntent: untypedBody.pendingIntent !== undefined && untypedBody.pendingIntent !== null,
-      hasUiState: typeof untypedBody.uiState === "object" && untypedBody.uiState !== null,
-    };
-
     const parsed = chatRequestSchema.parse(body);
     inputPreview = parsed.message;
+
     if (parsed.message.length > config.maxInputChars) {
       throw new ApiError(400, "BAD_REQUEST", "message exceeds AI_MAX_INPUT_CHARS.", {
         fieldErrors: {
@@ -83,119 +163,193 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const canDeterministicConfirm =
-      looksLikeConfirmation(parsed.message) &&
-      parsed.pendingIntent &&
-      parsed.pendingIntent.intent !== "Unknown" &&
-      parsed.pendingIntent.missingFields.length === 0 &&
-      Object.keys(parsed.pendingIntent.draftCandidate ?? {}).length > 0;
+    const sessionId = readRequiredSessionId(parsed);
+    const monthKey = readRequiredMonthKey(parsed);
+    const deviceId = parsed.session?.deviceId ?? parsed.deviceId;
 
-    if (canDeterministicConfirm) {
-      const data = normalizeChatOutput(
-        chatModelOutputSchema.parse({
-          status: "action_confirmation",
-          responseMode: "propose_action",
-          confidence: 0.93,
-          reply: "Confirmed. I prepared the draft for your review.",
-          pendingIntent: parsed.pendingIntent,
-          needsReview: true,
-          missingFields: [],
-          warnings: [],
-          assumptions: [],
-        }),
-        parsed,
-      );
+    if (parsed.appConfirmedAction && parsed.completedAction) {
+      const data = buildCompletedResponse(parsed.completedAction);
+      await clearPendingIntent(user, sessionId);
+      await persistTurnPair({
+        user,
+        sessionId,
+        userMessage: parsed.message,
+        assistantReply: data.reply,
+      });
 
       const latencyMs = Date.now() - startedAt;
-      const usage = {
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
-      };
-
+      const usage = zeroUsage();
       addAiLog({
         requestId,
         timestampIso: new Date().toISOString(),
         endpoint: "/api/ai/chat",
         ok: true,
-        model: `${config.chatModel}:deterministic_confirmation`,
+        model: `${config.chatModel}:deterministic_completion`,
         latencyMs,
         usage,
         inputPreview: parsed.message,
         outputPreview: data.reply,
         warnings: data.warnings,
-        requestDebug,
-      });
-
-      console.info("ai_request", {
-        requestId,
-        endpoint: "/api/ai/chat",
-        model: `${config.chatModel}:deterministic_confirmation`,
-        latencyMs,
-        usage,
       });
 
       return successResponse<ChatRouteData>(req, {
         ok: true,
         requestId,
         mode: "chat",
-        model: `${config.chatModel}:deterministic_confirmation`,
+        model: `${config.chatModel}:deterministic_completion`,
         latencyMs,
         usage,
         data,
       });
     }
 
-    const promptInput = buildChatPromptInput(parsed);
+    const [serverContext, storedPendingIntent, storedConversation] = await Promise.all([
+      loadMonthlyFinanceContext({
+        user,
+        monthKey,
+        currency: parsed.context?.currency,
+        locale: parsed.context?.locale,
+        timezone: parsed.context?.timezone,
+      }),
+      getPendingIntent(user, sessionId),
+      getRecentConversation(user, sessionId),
+    ]);
 
-    if (promptInput.length > config.maxInputChars) {
-      throw new ApiError(400, "BAD_REQUEST", "Request payload exceeds AI_MAX_INPUT_CHARS.", {
-        fieldErrors: {
-          message: [
-            `Payload for AI model must be <= ${config.maxInputChars} characters after normalization.`,
-          ],
-        },
-      });
-    }
+    const pendingIntent = storedPendingIntent ?? toPendingIntent(parsed.pendingIntent);
+    const conversation = storedConversation.length > 0 ? storedConversation : (parsed.conversation ?? []);
+    const canonicalRequest: ChatRequest = {
+      ...parsed,
+      session: {
+        sessionId,
+        deviceId,
+        assistantPersona: parsed.session?.assistantPersona,
+      },
+      context: serverContext,
+      conversation,
+      pendingIntent,
+      uiState: parsed.uiState,
+    };
 
-    const modelResult = await callChatModel({
-      promptInput,
-      maxOutputTokens: config.maxOutputTokens,
+    const deterministicResolver = deterministicResolve({
+      message: parsed.message,
+      conversation,
+      pendingIntent,
+      context: serverContext,
+      uiState: parsed.uiState,
+    });
+    const resolverPromptInput = buildResolverPromptInput({
+      message: parsed.message,
+      conversation,
+      pendingIntent,
+      context: serverContext,
+      uiState: parsed.uiState,
     });
 
-    const modelData = chatModelOutputSchema.parse(modelResult.result);
-    const data = normalizeChatOutput(modelData, parsed);
+    if (resolverPromptInput.length > config.maxInputChars) {
+      throw new ApiError(400, "BAD_REQUEST", "Resolver payload exceeds AI_MAX_INPUT_CHARS.");
+    }
+
+    const resolverModelResult = await callContextResolverModel({
+      promptInput: resolverPromptInput,
+      maxOutputTokens: Math.min(config.maxOutputTokens, 1200),
+    });
+    const resolver = reconcileResolverOutput(resolverModelResult.result, deterministicResolver);
+    const updatedPendingIntent = mergePendingIntent(pendingIntent, resolver, {
+      monthKey,
+      todayIso: serverContext.todayIso ?? new Date().toISOString().slice(0, 10),
+    });
+    const amountForAffordability =
+      resolver.requestedAmountCents ??
+      (typeof updatedPendingIntent?.draftCandidate.amountCents === "number"
+        ? updatedPendingIntent.draftCandidate.amountCents
+        : null);
+    const affordability = computeAffordability({
+      message: parsed.message,
+      context: serverContext,
+      requestedAmountCents: amountForAffordability,
+    });
+    const advisorRequest: ChatRequest = {
+      ...canonicalRequest,
+      pendingIntent: updatedPendingIntent,
+    };
+    const advisorPromptInput = buildAdvisorPromptInput({
+      request: advisorRequest,
+      resolver,
+      affordabilityCheck: affordability.affordabilityCheck,
+    });
+
+    if (advisorPromptInput.length > config.maxInputChars) {
+      throw new ApiError(400, "BAD_REQUEST", "Advisor payload exceeds AI_MAX_INPUT_CHARS.");
+    }
+
+    const advisorModelResult = await callFinanceAdvisorModel({
+      promptInput: advisorPromptInput,
+      maxOutputTokens: config.maxOutputTokens,
+    });
+    const modelData = chatModelOutputSchema.parse(advisorModelResult.result);
+    const normalized = normalizeChatOutput(modelData, advisorRequest);
+    const data = enforceDraftSafety({
+      data: normalized,
+      resolver,
+      pendingIntent: updatedPendingIntent,
+    });
+
+    if (resolver.classification === "RejectPendingAction" || data.status === "completed") {
+      await clearPendingIntent(user, sessionId);
+    } else if (data.pendingIntent) {
+      await savePendingIntent(user, sessionId, data.pendingIntent);
+    }
+
+    await persistTurnPair({
+      user,
+      sessionId,
+      userMessage: parsed.message,
+      assistantReply: data.reply,
+    });
 
     const latencyMs = Date.now() - startedAt;
+    const usage = addUsage(resolverModelResult.usage, advisorModelResult.usage);
+    const model = `${resolverModelResult.model}:resolver+${advisorModelResult.model}:advisor`;
     addAiLog({
       requestId,
       timestampIso: new Date().toISOString(),
       endpoint: "/api/ai/chat",
       ok: true,
-      model: modelResult.model,
+      model,
       latencyMs,
-      usage: modelResult.usage,
+      usage,
       inputPreview: parsed.message,
       outputPreview: data.reply,
       warnings: data.warnings,
-      requestDebug,
+      requestDebug: {
+        hasContext: true,
+        hasConversation: conversation.length > 0,
+        conversationLength: conversation.length,
+        hasPendingIntent: Boolean(updatedPendingIntent),
+        hasUiState: Boolean(parsed.uiState),
+        topLevelKeys: Object.keys((body as Record<string, unknown>) ?? {}).slice(0, 20),
+      },
     });
 
     console.info("ai_request", {
       requestId,
       endpoint: "/api/ai/chat",
-      model: modelResult.model,
+      model,
       latencyMs,
-      usage: modelResult.usage,
+      usage,
+      userId: user.id,
+      sessionId,
+      deviceId,
+      resolverClassification: resolver.classification,
     });
 
     return successResponse<ChatRouteData>(req, {
       ok: true,
       requestId,
       mode: "chat",
-      model: modelResult.model,
+      model,
       latencyMs,
-      usage: modelResult.usage,
+      usage,
       data,
     });
   } catch (error) {
@@ -211,7 +365,6 @@ export async function POST(req: NextRequest) {
         inputPreview === "chat request failed before a valid model response was returned"
           ? requestPreview
           : inputPreview,
-      requestDebug,
       error: {
         code: apiError.code,
         message: apiError.message,
@@ -227,7 +380,6 @@ export async function POST(req: NextRequest) {
       errorName: error instanceof Error ? error.name : "UnknownError",
       errorMessage:
         error instanceof Error ? error.message.slice(0, 240) : "non-error thrown value",
-      requestDebug,
     });
 
     return errorResponse(
