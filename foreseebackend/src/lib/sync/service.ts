@@ -1,7 +1,8 @@
 import { ZodError } from "zod";
 
+import type { AuthenticatedUser } from "@/lib/auth/clerk";
 import { ApiError } from "@/lib/http/errors";
-import { supabaseRest, type AuthenticatedUser } from "@/lib/supabase/client";
+import { supabaseRest } from "@/lib/supabase/client";
 import {
   normalizeEntityType,
   payloadSchemas,

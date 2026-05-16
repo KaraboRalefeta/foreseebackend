@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { bearerTokenFromAuthorization, getAuthenticatedUser } from "@/lib/auth/clerk";
 import { ApiError, fromUnknownError } from "@/lib/http/errors";
 import {
   createRequestId,
@@ -7,7 +8,6 @@ import {
   optionsResponse,
   responseHeaders,
 } from "@/lib/http/response";
-import { bearerTokenFromAuthorization, getSupabaseUser } from "@/lib/supabase/client";
 import { pullChanges } from "@/lib/sync/service";
 
 export const runtime = "nodejs";
@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const token = bearerTokenFromAuthorization(req.headers.get("authorization"));
-    const user = await getSupabaseUser(token);
+    const user = await getAuthenticatedUser(token);
     const since = req.nextUrl.searchParams.get("since") ?? undefined;
 
     if (since && Number.isNaN(Date.parse(since))) {

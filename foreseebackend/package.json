@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@clerk/backend": "^3.4.9",
     "@vercel/blob": "^2.3.3",
     "next": "16.2.4",
     "openai": "^6.34.0",

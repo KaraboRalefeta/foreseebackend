@@ -1,6 +1,7 @@
 import { pendingIntentSchema, type ChatRequest } from "@/lib/ai/schemas";
-import { supabaseRest, type AuthenticatedUser } from "@/lib/supabase/client";
+import type { AuthenticatedUser } from "@/lib/auth/clerk";
 import type { PendingIntent } from "@/lib/ai/draft-safety";
+import { supabaseRest } from "@/lib/supabase/client";
 
 type PendingIntentRow = {
   pending_intent: unknown;

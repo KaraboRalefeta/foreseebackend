@@ -5,11 +5,6 @@ type SupabaseConfig = {
   serviceRoleKey: string;
 };
 
-type SupabaseUserResponse = {
-  id?: unknown;
-  email?: unknown;
-};
-
 let cachedConfig: SupabaseConfig | null = null;
 
 function getSupabaseConfig(): SupabaseConfig {
@@ -46,51 +41,13 @@ function getSupabaseConfig(): SupabaseConfig {
   return cachedConfig;
 }
 
-function jsonHeaders(accessToken?: string): HeadersInit {
+function jsonHeaders(): HeadersInit {
   const config = getSupabaseConfig();
 
   return {
     apikey: config.serviceRoleKey,
-    authorization: `Bearer ${accessToken ?? config.serviceRoleKey}`,
+    authorization: `Bearer ${config.serviceRoleKey}`,
     "content-type": "application/json",
-  };
-}
-
-export type AuthenticatedUser = {
-  id: string;
-  email?: string;
-};
-
-export function bearerTokenFromAuthorization(authorization: string | null): string {
-  const [scheme, token] = authorization?.split(" ") ?? [];
-
-  if (scheme?.toLowerCase() !== "bearer" || !token) {
-    throw new ApiError(401, "UNAUTHORIZED", "Missing bearer access token.");
-  }
-
-  return token;
-}
-
-export async function getSupabaseUser(accessToken: string): Promise<AuthenticatedUser> {
-  const config = getSupabaseConfig();
-  const response = await fetch(`${config.url}/auth/v1/user`, {
-    headers: jsonHeaders(accessToken),
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    throw new ApiError(401, "UNAUTHORIZED", "Invalid or expired bearer access token.");
-  }
-
-  const data = (await response.json()) as SupabaseUserResponse;
-
-  if (typeof data.id !== "string") {
-    throw new ApiError(401, "UNAUTHORIZED", "Bearer access token did not resolve to a user.");
-  }
-
-  return {
-    id: data.id,
-    email: typeof data.email === "string" ? data.email : undefined,
   };
 }
 

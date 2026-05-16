@@ -1,5 +1,9 @@
 import { NextRequest } from "next/server";
 
+import {
+  bearerTokenFromAuthorization,
+  getAuthenticatedUser,
+} from "@/lib/auth/clerk";
 import { computeAffordability } from "@/lib/ai/affordability";
 import {
   buildResolverPromptInput,
@@ -36,7 +40,6 @@ import {
   optionsResponse,
   successResponse,
 } from "@/lib/http/response";
-import { bearerTokenFromAuthorization, getSupabaseUser } from "@/lib/supabase/client";
 
 export const runtime = "nodejs";
 
@@ -107,7 +110,7 @@ function buildAdvisorPromptInput(params: {
 }
 
 async function persistTurnPair(params: {
-  user: Awaited<ReturnType<typeof getSupabaseUser>>;
+  user: Awaited<ReturnType<typeof getAuthenticatedUser>>;
   sessionId: string;
   userMessage: string;
   assistantReply: string;
@@ -139,7 +142,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const token = bearerTokenFromAuthorization(req.headers.get("authorization"));
-    const user = await getSupabaseUser(token);
+    const user = await getAuthenticatedUser(token);
     const rawBody = await req.text().catch(() => {
       throw new ApiError(400, "BAD_REQUEST", "Invalid request body.");
     });

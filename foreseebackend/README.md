@@ -28,6 +28,9 @@ npm run dev
 
 Required:
 - `OPENAI_API_KEY`
+- `CLERK_SECRET_KEY`
+- `SUPABASE_URL` (server-side Supabase project URL)
+- `SUPABASE_SERVICE_ROLE_KEY` (server-only key used by trusted sync routes)
 
 Optional:
 - `OPENAI_MODEL_CHAT` (default: `gpt-5.4-mini`)
@@ -36,13 +39,15 @@ Optional:
 - `AI_MAX_OUTPUT_TOKENS` (default: `2000`)
 - `AI_ALLOWED_ORIGINS` (comma-separated origins; if unset in local dev, `*` is allowed)
 - `BLOB_READ_WRITE_TOKEN` (optional; enables persistent `/api/ai/logs` on Vercel)
-- `SUPABASE_URL` (server-side Supabase project URL)
-- `SUPABASE_SERVICE_ROLE_KEY` (server-only key used by trusted sync routes)
-- `SUPABASE_ANON_KEY` (optional; publishable client key reference)
+- `CLERK_API_URL` (default: `https://api.clerk.com`)
+- `CLERK_AUDIENCE` (comma-separated allowed `aud` claims, if configured in Clerk)
+- `CLERK_AUTHORIZED_PARTIES` (comma-separated allowed `azp` origins, if present in Clerk tokens)
+- `CLERK_JWT_KEY` (optional PEM public key for networkless token verification)
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` (publishable client key reference)
 
-The Android app should use Supabase Auth and send the resulting access token as
-`Authorization: Bearer <access_token>` to sync endpoints. Do not ship the service
-role key in the Android app.
+The Android app should use Clerk and send the active Clerk session token as
+`Authorization: Bearer <clerk_session_token>` to protected backend endpoints.
+Do not ship `CLERK_SECRET_KEY` or `SUPABASE_SERVICE_ROLE_KEY` in the Android app.
 
 ### Sample `.env.example`
 
@@ -54,9 +59,14 @@ AI_MAX_INPUT_CHARS=6000
 AI_MAX_OUTPUT_TOKENS=2000
 AI_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:8080
 BLOB_READ_WRITE_TOKEN=
+CLERK_SECRET_KEY=your_clerk_secret_key_here
+CLERK_API_URL=https://api.clerk.com
+CLERK_AUDIENCE=
+CLERK_AUTHORIZED_PARTIES=
+CLERK_JWT_KEY=
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key_here
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
-SUPABASE_ANON_KEY=your_publishable_or_anon_key_here
 ```
 
 ### Curl examples
@@ -116,7 +126,7 @@ Sync exchange:
 
 ```bash
 curl -s -X POST http://localhost:3000/sync \
-  -H "authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+  -H "authorization: Bearer $CLERK_SESSION_TOKEN" \
   -H "content-type: application/json" \
   -d '{
     "deviceId": "android_pixel_8",
@@ -176,7 +186,8 @@ Android offline-first sync notes:
 
 Supabase schema:
 - SQL migrations live in `supabase/migrations`.
-- All finance tables use UUID primary keys, explicit `user_id`, soft deletes, `updated_at` triggers, enum-like check constraints, RLS policies, and indexes for sync queries.
+- All finance tables use UUID primary keys, explicit Clerk `user_id` values, soft deletes, `updated_at` triggers, enum-like check constraints, RLS policies, and indexes for sync queries.
+- The Clerk migration clears old Supabase Auth-owned user data and converts `user_id` columns from Supabase Auth UUIDs to Clerk user ID text values.
 
 ### Example success response envelope
 

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { ApiError, fromUnknownError } from "@/lib/http/errors";
 import {
   bearerTokenFromAuthorization,
-  getSupabaseUser,
-} from "@/lib/supabase/client";
+  getAuthenticatedUser,
+} from "@/lib/auth/clerk";
+import { ApiError, fromUnknownError } from "@/lib/http/errors";
 import { pullChanges, pushChanges } from "@/lib/sync/service";
 import { syncExchangeRequestSchema } from "@/lib/sync/schemas";
 import {
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const token = bearerTokenFromAuthorization(req.headers.get("authorization"));
-    const user = await getSupabaseUser(token);
+    const user = await getAuthenticatedUser(token);
     const body = await req.json().catch(() => {
       throw new ApiError(400, "BAD_REQUEST", "Invalid JSON request body.");
     });

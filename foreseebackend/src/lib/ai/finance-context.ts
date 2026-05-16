@@ -1,5 +1,6 @@
 import type { ChatRequest } from "@/lib/ai/schemas";
-import { supabaseRest, type AuthenticatedUser } from "@/lib/supabase/client";
+import type { AuthenticatedUser } from "@/lib/auth/clerk";
+import { supabaseRest } from "@/lib/supabase/client";
 
 type TransactionRow = {
   amount_cents: number;
