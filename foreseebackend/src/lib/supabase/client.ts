@@ -7,6 +7,53 @@ type SupabaseConfig = {
 
 let cachedConfig: SupabaseConfig | null = null;
 
+function readLegacyJwtRole(key: string): string | null {
+  const [, payload] = key.split(".");
+  if (!payload) {
+    return null;
+  }
+
+  try {
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(
+      normalized.length + ((4 - (normalized.length % 4)) % 4),
+      "=",
+    );
+    const decoded = JSON.parse(Buffer.from(padded, "base64").toString("utf8")) as {
+      role?: unknown;
+    };
+
+    return typeof decoded.role === "string" ? decoded.role : null;
+  } catch {
+    return null;
+  }
+}
+
+function assertServerOnlySupabaseKey(serviceRoleKey: string): void {
+  if (serviceRoleKey.startsWith("sb_publishable_")) {
+    throw new ApiError(
+      500,
+      "INTERNAL",
+      "SUPABASE_SERVICE_ROLE_KEY must be the server-only service_role or secret key, not the publishable key.",
+    );
+  }
+
+  if (!serviceRoleKey.startsWith("eyJ")) {
+    return;
+  }
+
+  const role = readLegacyJwtRole(serviceRoleKey);
+  if (role === "service_role") {
+    return;
+  }
+
+  throw new ApiError(
+    500,
+    "INTERNAL",
+    `SUPABASE_SERVICE_ROLE_KEY must use the service_role JWT. Current JWT role: ${role ?? "unknown"}.`,
+  );
+}
+
 function getSupabaseConfig(): SupabaseConfig {
   if (cachedConfig) {
     return cachedConfig;
@@ -19,13 +66,7 @@ function getSupabaseConfig(): SupabaseConfig {
     throw new ApiError(500, "INTERNAL", "Supabase server environment is not configured.");
   }
 
-  if (serviceRoleKey.startsWith("sb_publishable_") || serviceRoleKey.startsWith("eyJ")) {
-    throw new ApiError(
-      500,
-      "INTERNAL",
-      "SUPABASE_SERVICE_ROLE_KEY must be the server-only service_role secret, not the publishable/anon key.",
-    );
-  }
+  assertServerOnlySupabaseKey(serviceRoleKey);
 
   let normalizedUrl: string;
   try {
